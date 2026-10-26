@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 
 from flask import Flask, jsonify
 from flask_caching import Cache
@@ -7,6 +8,7 @@ from flask_jwt_extended import JWTManager
 from flask_mail import Mail
 
 from models import User, db
+from routes.auth import auth_bp
 
 # Folder that contains this file, used to build an absolute path for the SQLite file
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -16,7 +18,11 @@ class Config:
     """All app settings in one place. Values can be overridden with environment variables."""
 
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-me")
-    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-jwt-secret-change-me")
+    # Used to sign JWTs; at least 32 characters so PyJWT does not warn about a weak key
+    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-jwt-secret-change-me-32-chars-long")
+    # How long a login token stays valid. There are no refresh tokens, so after this
+    # the user simply logs in again. 1 day keeps demos from logging out midway.
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=1)
 
     # SQLite database file stored inside backend/instance/
     SQLALCHEMY_DATABASE_URI = "sqlite:///" + os.path.join(BASE_DIR, "instance", "trekking.db")
@@ -84,7 +90,22 @@ def create_app(config_class=Config):
     # Allow the Vite dev server (a different port) to call /api/* routes
     CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-    # Blueprints from routes/ will be registered here later
+    # Flask-JWT-Extended normally replies {"msg": ...} when a token is missing or bad.
+    # These handlers make those errors use our {"error": ...} shape with status 401.
+    @jwt.unauthorized_loader
+    def missing_token(reason):
+        return jsonify({"error": "Login required: missing access token."}), 401
+
+    @jwt.invalid_token_loader
+    def invalid_token(reason):
+        return jsonify({"error": "Invalid access token. Please log in again."}), 401
+
+    @jwt.expired_token_loader
+    def expired_token(jwt_header, jwt_payload):
+        return jsonify({"error": "Your session has expired. Please log in again."}), 401
+
+    # Register route blueprints
+    app.register_blueprint(auth_bp)
 
     # Simple check that the server is running
     @app.route("/api/health")
