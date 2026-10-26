@@ -1,0 +1,21 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Database (created by db.create_all())
+*.db
+backend/instance/
+
+# Celery beat schedule file
+celerybeat-schedule*
+
+# Node / Vite
+node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+.vscode/
+.env
