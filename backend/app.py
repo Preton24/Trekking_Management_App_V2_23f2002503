@@ -8,6 +8,7 @@ from flask_jwt_extended import JWTManager
 from flask_mail import Mail
 
 from models import User, db
+from routes.admin import admin_bp
 from routes.auth import auth_bp
 
 # Folder that contains this file, used to build an absolute path for the SQLite file
@@ -106,6 +107,7 @@ def create_app(config_class=Config):
 
     # Register route blueprints
     app.register_blueprint(auth_bp)
+    app.register_blueprint(admin_bp)
 
     # Simple check that the server is running
     @app.route("/api/health")
