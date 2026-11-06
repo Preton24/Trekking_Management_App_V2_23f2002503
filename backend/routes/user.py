@@ -58,6 +58,29 @@ def list_open_treks():
     return jsonify([trek.to_dict() for trek in treks]), 200
 
 
+@user_bp.route("/treks/<int:trek_id>", methods=["GET"])
+@role_required(User.ROLE_TREKKER)
+def trek_detail(trek_id):
+    """One trek's details, plus whether the logged-in trekker already has it booked."""
+    user = get_current_user()
+
+    trek = db.session.get(Trek, trek_id)
+    if trek is None:
+        return error_response("Trek not found.", 404)
+
+    # Treks that are not Open are hidden from browsing, so only a trekker who has
+    # (or had) a booking on one may open its page, e.g. from their booking history
+    ever_booked = Booking.query.filter_by(user_id=user.id, trek_id=trek.id).first() is not None
+    if trek.status != "Open" and not ever_booked:
+        return error_response("Trek not found.", 404)
+
+    already_booked = Booking.query.filter_by(user_id=user.id, trek_id=trek.id, status="Booked").first() is not None
+
+    data = trek.to_dict()
+    data["already_booked"] = already_booked  # lets the page disable the Book button
+    return jsonify(data), 200
+
+
 # ---------------------------------------------------------------------------
 # Booking
 # ---------------------------------------------------------------------------
