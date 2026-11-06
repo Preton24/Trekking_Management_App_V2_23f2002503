@@ -10,7 +10,8 @@ class Trek(db.Model):
 
     # Allowed values, kept here so routes can reuse them for validation
     DIFFICULTIES = ["Easy", "Moderate", "Hard"]
-    STATUSES = ["Pending", "Approved", "Open", "Closed", "Completed"]
+    # "Ongoing" = staff has started the trek (it is on the trail right now)
+    STATUSES = ["Pending", "Approved", "Open", "Closed", "Ongoing", "Completed"]
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(150), nullable=False)

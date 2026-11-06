@@ -10,6 +10,8 @@ from flask_mail import Mail
 from models import User, db
 from routes.admin import admin_bp
 from routes.auth import auth_bp
+from routes.staff import staff_bp
+from routes.user import user_bp
 
 # Folder that contains this file, used to build an absolute path for the SQLite file
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -108,6 +110,8 @@ def create_app(config_class=Config):
     # Register route blueprints
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(staff_bp)
+    app.register_blueprint(user_bp)
 
     # Simple check that the server is running
     @app.route("/api/health")
