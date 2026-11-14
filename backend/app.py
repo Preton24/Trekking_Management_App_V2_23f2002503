@@ -8,6 +8,7 @@ from flask_jwt_extended import JWTManager
 from flask_mail import Mail
 
 from cache_utils import cache
+from celery_utils import init_celery
 from models import User, db
 from routes.admin import admin_bp
 from routes.auth import auth_bp
@@ -16,6 +17,37 @@ from routes.user import user_bp
 
 # Folder that contains this file, used to build an absolute path for the SQLite file
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
+
+def load_env_file():
+    """Read KEY=value lines from the .env file in the project root into os.environ.
+
+    Secrets (the Gmail app password, the Google Chat webhook URL) live in .env,
+    which is listed in .gitignore, so they never appear in the code or on GitHub.
+    Doing this in a few lines of our own avoids adding another library, and it
+    means Flask, the Celery worker and Celery beat all get the same settings
+    without having to remember to export anything in each terminal.
+    """
+    env_path = os.path.join(BASE_DIR, "..", ".env")
+    if not os.path.exists(env_path):
+        return  # no .env file: the defaults in Config are used
+
+    with open(env_path) as env_file:
+        for line in env_file:
+            line = line.strip()
+            # Skip blank lines, comments, and anything that is not KEY=value
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            # Split on the FIRST "=" only, because a webhook URL contains "=" itself
+            name, value = line.split("=", 1)
+            name = name.strip()
+            value = value.strip().strip('"').strip("'")
+            # setdefault keeps a variable that was already set in the terminal
+            os.environ.setdefault(name, value)
+
+
+# Must run before the Config class below, because Config reads os.environ when it is defined
+load_env_file()
 
 
 class Config:
@@ -46,6 +78,25 @@ class Config:
     MAIL_SERVER = os.environ.get("MAIL_SERVER", "localhost")
     MAIL_PORT = int(os.environ.get("MAIL_PORT", 1025))
     MAIL_DEFAULT_SENDER = os.environ.get("MAIL_DEFAULT_SENDER", "noreply@trekking.local")
+    # Needed for Gmail (smtp.gmail.com, port 587): log in with an app password over TLS
+    MAIL_USE_TLS = os.environ.get("MAIL_USE_TLS", "false").lower() == "true"
+    MAIL_USERNAME = os.environ.get("MAIL_USERNAME")
+    MAIL_PASSWORD = os.environ.get("MAIL_PASSWORD")
+
+    # Google Chat space webhook that the daily reminder task posts to (kept in .env)
+    GOOGLE_CHAT_WEBHOOK_URL = os.environ.get("GOOGLE_CHAT_WEBHOOK_URL", "")
+
+    # Where the monthly report is emailed. Empty means "the admin account's own email".
+    # Useful because the default admin address (admin@trekking.local) is not a real mailbox.
+    MONTHLY_REPORT_EMAIL = os.environ.get("MONTHLY_REPORT_EMAIL", "")
+
+    # Time of day (24-hour clock, Asia/Kolkata) when the daily reminder job runs
+    REMINDER_HOUR = int(os.environ.get("REMINDER_HOUR", 8))
+    REMINDER_MINUTE = int(os.environ.get("REMINDER_MINUTE", 0))
+
+    # DEMO_MODE=true makes every scheduled job run once a minute, so it can be
+    # shown in the viva without waiting for the real time of day
+    DEMO_MODE = os.environ.get("DEMO_MODE", "false").lower() == "true"
 
     # The single admin account, created in code on startup (there is no admin signup)
     ADMIN_NAME = os.environ.get("ADMIN_NAME", "Admin")
@@ -96,6 +147,8 @@ def create_app(config_class=Config):
     cache.init_app(app)
     jwt.init_app(app)
     mail.init_app(app)
+    # Celery: lets routes queue background tasks and check on them (see celery_utils.py)
+    init_celery(app)
     # Allow the Vite dev server (a different port) to call /api/* routes
     CORS(app, resources={r"/api/*": {"origins": "*"}})
 

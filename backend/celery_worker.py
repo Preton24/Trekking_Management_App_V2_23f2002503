@@ -1,27 +1,18 @@
-from celery import Celery
+"""Entry point for the Celery worker and Celery beat.
 
+Run both from the backend/ folder:
+    celery -A celery_worker.celery worker --loglevel=info
+    celery -A celery_worker.celery beat --loglevel=info
+
+"-A celery_worker.celery" means: import this file and use the variable `celery`.
+"""
 from app import create_app
 
-# Build the Flask app so Celery tasks can use its config and database
+# Building the Flask app also builds the Celery object (see init_celery in
+# celery_utils.py), whose tasks run inside this app's context so they can use
+# the models and the config.
 flask_app = create_app()
+celery = flask_app.extensions["celery"]
 
-celery = Celery(
-    "trekking",
-    broker=flask_app.config["CELERY_BROKER_URL"],
-    backend=flask_app.config["CELERY_RESULT_BACKEND"],
-)
-
-
-class FlaskTask(celery.Task):
-    """Runs every task inside the Flask app context, so db and config work in tasks."""
-
-    def __call__(self, *args, **kwargs):
-        with flask_app.app_context():
-            return self.run(*args, **kwargs)
-
-
-celery.Task = FlaskTask
-
-# Scheduled jobs (daily reminders, monthly reports) will be added to this later
-celery.conf.beat_schedule = {}
-celery.conf.timezone = "Asia/Kolkata"
+# Importing tasks.py registers its tasks with the worker
+import tasks  # noqa: E402,F401

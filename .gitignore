@@ -11,6 +11,9 @@ backend/instance/
 # Celery beat schedule file
 celerybeat-schedule*
 
+# CSV files written by the export task
+backend/static/exports/
+
 # Node / Vite
 node_modules/
 frontend/dist/

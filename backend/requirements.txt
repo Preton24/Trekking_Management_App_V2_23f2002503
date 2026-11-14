@@ -5,4 +5,5 @@ flask-caching
 flask-cors
 flask-mail
 celery
+fpdf2
 redis
