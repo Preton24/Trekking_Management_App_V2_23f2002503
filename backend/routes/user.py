@@ -4,7 +4,11 @@ Every route is protected with @role_required("trekker").
 """
 from datetime import date
 
-from flask import Blueprint, jsonify, request
+import redis
+from celery.result import AsyncResult
+from flask import Blueprint, current_app, jsonify, request
+from kombu.exceptions import OperationalError
+from redis.exceptions import RedisError
 from sqlalchemy.exc import IntegrityError
 
 from cache_utils import (
@@ -17,6 +21,7 @@ from cache_utils import (
     trek_list_key,
 )
 from models import Booking, Trek, User, db
+from tasks import export_bookings_csv
 from utils import error_response, get_current_user, role_required
 
 user_bp = Blueprint("user", __name__, url_prefix="/api")
@@ -244,6 +249,81 @@ def my_bookings():
         .all()
     )
     return jsonify([booking_details(b) for b in bookings]), 200
+
+
+# ---------------------------------------------------------------------------
+# CSV export (runs in the background as a Celery task)
+# ---------------------------------------------------------------------------
+
+def queue_is_reachable():
+    """Quick check that Redis (the Celery broker) is running.
+
+    Without this, Celery keeps retrying for close to a minute when Redis is
+    down, and the user would stare at a frozen button. One ping with a
+    1-second limit lets us answer straight away instead.
+    """
+    try:
+        client = redis.Redis.from_url(current_app.config["CELERY_BROKER_URL"], socket_connect_timeout=1)
+        client.ping()
+        return True
+    except RedisError:
+        return False
+
+
+@user_bp.route("/bookings/export", methods=["POST"])
+@role_required(User.ROLE_TREKKER)
+def export_my_bookings():
+    """Start a CSV export of my bookings and reply straight away with a task id.
+
+    .delay() only puts a message on the Redis queue; the Celery worker does the
+    real work. 202 means "accepted, not finished yet". The page then asks
+    GET /api/tasks/<id> every few seconds until the file is ready.
+    """
+    user = get_current_user()
+    if not queue_is_reachable():
+        return error_response("The export service is not available right now. Please try again later.", 503)
+
+    try:
+        task = export_bookings_csv.delay(user.id)
+    except (OperationalError, RedisError):
+        # Redis went away between the check and the send, so the task was not queued
+        return error_response("The export service is not available right now. Please try again later.", 503)
+
+    return jsonify({"message": "Export started.", "task_id": task.id}), 202
+
+
+@user_bp.route("/tasks/<task_id>", methods=["GET"])
+@role_required(User.ROLE_TREKKER)
+def task_status(task_id):
+    """Report how a background task is doing, using what Celery stored in Redis.
+
+    state is PENDING (waiting in the queue), STARTED (the worker is on it),
+    SUCCESS or FAILURE. Celery also answers PENDING for an id it has never
+    seen, so the page gives up after a fixed number of checks.
+    """
+    user = get_current_user()
+    try:
+        result = AsyncResult(task_id, app=current_app.extensions["celery"])
+        state = result.state
+        task_result = result.result if state == "SUCCESS" else None
+    except (OperationalError, RedisError):
+        return error_response("The export service is not available right now. Please try again later.", 503)
+
+    response = {"task_id": task_id, "state": state, "ready": False}
+
+    if state == "SUCCESS":
+        # The task saved who the export belongs to. Anyone else gets the same 404
+        # as for a wrong id, so one trekker cannot fetch another's download link.
+        if not isinstance(task_result, dict) or task_result.get("user_id") != user.id:
+            return error_response("Task not found.", 404)
+        response["ready"] = True
+        response["rows"] = task_result["rows"]
+        # Files in backend/static/ are served by Flask at /static/...
+        response["download_url"] = "/static/exports/" + task_result["filename"]
+    elif state == "FAILURE":
+        response["error"] = "The export failed. Please try again."
+
+    return jsonify(response), 200
 
 
 # ---------------------------------------------------------------------------

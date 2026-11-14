@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+  <body style="margin:0; padding:24px; background-color:#f8f9fa; font-family:Arial, Helvetica, sans-serif; color:#212529;">
+    {# Email programs ignore <link> stylesheets, so Bootstrap cannot be loaded here.
+       Every style is written inline, using Bootstrap's colours and spacing. #}
+    <div style="max-width:640px; margin:0 auto; background-color:#ffffff; border:1px solid #dee2e6; border-radius:6px;">
+
+      <div style="background-color:#198754; color:#ffffff; padding:16px 24px; border-radius:6px 6px 0 0;">
+        <h1 style="margin:0; font-size:22px;">Monthly activity report</h1>
+        <div style="font-size:14px;">{{ month_name }}</div>
+      </div>
+
+      <div style="padding:24px;">
+        {# Summary numbers #}
+        <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+          <tr>
+            <td style="width:50%; padding:12px; border:1px solid #dee2e6; text-align:center;">
+              <div style="font-size:13px; color:#6c757d;">Treks conducted</div>
+              <div style="font-size:28px; font-weight:bold;">{{ report.treks|length }}</div>
+            </td>
+            <td style="width:50%; padding:12px; border:1px solid #dee2e6; text-align:center;">
+              <div style="font-size:13px; color:#6c757d;">Participants</div>
+              <div style="font-size:28px; font-weight:bold;">{{ report.total_participants }}</div>
+            </td>
+          </tr>
+        </table>
+
+        <h2 style="font-size:17px; margin:0 0 8px 0;">Treks conducted in {{ month_name }}</h2>
+        {% if report.treks %}
+        <table style="width:100%; border-collapse:collapse; margin-bottom:24px; font-size:14px;">
+          <tr style="background-color:#f8f9fa;">
+            <th style="padding:8px; border:1px solid #dee2e6; text-align:left;">Trek</th>
+            <th style="padding:8px; border:1px solid #dee2e6; text-align:left;">Location</th>
+            <th style="padding:8px; border:1px solid #dee2e6; text-align:left;">Started</th>
+            <th style="padding:8px; border:1px solid #dee2e6; text-align:left;">Status</th>
+            <th style="padding:8px; border:1px solid #dee2e6; text-align:right;">Participants</th>
+          </tr>
+          {% for trek in report.treks %}
+          <tr>
+            <td style="padding:8px; border:1px solid #dee2e6;">{{ trek.name }}</td>
+            <td style="padding:8px; border:1px solid #dee2e6;">{{ trek.location }}</td>
+            <td style="padding:8px; border:1px solid #dee2e6;">{{ trek.start_date }}</td>
+            <td style="padding:8px; border:1px solid #dee2e6;">{{ trek.status }}</td>
+            <td style="padding:8px; border:1px solid #dee2e6; text-align:right;">{{ trek.participants }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <p style="color:#6c757d; margin:0 0 24px 0;">No treks were conducted in {{ month_name }}.</p>
+        {% endif %}
+
+        <h2 style="font-size:17px; margin:0 0 8px 0;">Top 3 popular treks (by bookings made)</h2>
+        {% if report.top_treks %}
+        <table style="width:100%; border-collapse:collapse; font-size:14px;">
+          <tr style="background-color:#f8f9fa;">
+            <th style="padding:8px; border:1px solid #dee2e6; text-align:left;">#</th>
+            <th style="padding:8px; border:1px solid #dee2e6; text-align:left;">Trek</th>
+            <th style="padding:8px; border:1px solid #dee2e6; text-align:left;">Location</th>
+            <th style="padding:8px; border:1px solid #dee2e6; text-align:right;">Bookings</th>
+          </tr>
+          {% for trek in report.top_treks %}
+          <tr>
+            <td style="padding:8px; border:1px solid #dee2e6;">{{ loop.index }}</td>
+            <td style="padding:8px; border:1px solid #dee2e6;">{{ trek.name }}</td>
+            <td style="padding:8px; border:1px solid #dee2e6;">{{ trek.location }}</td>
+            <td style="padding:8px; border:1px solid #dee2e6; text-align:right;">{{ trek.bookings }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <p style="color:#6c757d; margin:0;">No bookings were made in {{ month_name }}.</p>
+        {% endif %}
+      </div>
+
+      <div style="padding:12px 24px; border-top:1px solid #dee2e6; font-size:12px; color:#6c757d;">
+        Sent automatically by the Trekking Management Application on the 1st of each month.
+      </div>
+    </div>
+  </body>
+</html>
