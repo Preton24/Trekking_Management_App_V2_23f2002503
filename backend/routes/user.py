@@ -7,6 +7,15 @@ from datetime import date
 from flask import Blueprint, jsonify, request
 from sqlalchemy.exc import IntegrityError
 
+from cache_utils import (
+    TREK_DETAIL_TIMEOUT,
+    TREK_LIST_TIMEOUT,
+    cache_get,
+    cache_set,
+    clear_trek_caches,
+    trek_detail_key,
+    trek_list_key,
+)
 from models import Booking, Trek, User, db
 from utils import error_response, get_current_user, role_required
 
@@ -22,16 +31,14 @@ user_bp = Blueprint("user", __name__, url_prefix="/api")
 def list_open_treks():
     """Open treks only. Optional filters (all can be combined):
     ?difficulty= &location= &min_duration= &max_duration= &q= (text search)
+
+    Cached for 5 minutes, with one cache entry per combination of filters.
+    This is the busiest read in the app and every trekker gets the same answer.
     """
-    query = Trek.query.filter(Trek.status == "Open")
-
-    difficulty = request.args.get("difficulty")
-    if difficulty:
-        query = query.filter(Trek.difficulty == difficulty)
-
+    # --- Step 1: read and check the filters ---
+    difficulty = (request.args.get("difficulty") or "").strip()
     location = (request.args.get("location") or "").strip()
-    if location:
-        query = query.filter(Trek.location.ilike(f"%{location}%"))
+    text = (request.args.get("q") or "").strip()
 
     # type=int returns None for text like "abc"; we treat that as a bad request
     for param in ("min_duration", "max_duration"):
@@ -40,14 +47,35 @@ def list_open_treks():
             return error_response(f"{param} must be a whole number.", 400)
     min_duration = request.args.get("min_duration", type=int)
     max_duration = request.args.get("max_duration", type=int)
+    if min_duration is not None and max_duration is not None and min_duration > max_duration:
+        return error_response("min_duration cannot be greater than max_duration.", 400)
+
+    # --- Step 2: look in the cache ---
+    # The key is built from the cleaned filter values (not the raw URL), so
+    # "?q=goa&difficulty=Easy" and "?difficulty=Easy&q=goa" share one entry,
+    # and unknown extra parameters cannot fill Redis with useless keys.
+    # The text filters are lower-cased because the search ignores case anyway.
+    key = trek_list_key({
+        "difficulty": difficulty,
+        "location": location.lower(),
+        "min_duration": min_duration,
+        "max_duration": max_duration,
+        "q": text.lower(),
+    })
+    cached_treks = cache_get(key)
+    if cached_treks is not None:
+        return jsonify(cached_treks), 200
+
+    # --- Step 3: cache MISS, so run the real database query ---
+    query = Trek.query.filter(Trek.status == "Open")
+    if difficulty:
+        query = query.filter(Trek.difficulty == difficulty)
+    if location:
+        query = query.filter(Trek.location.ilike(f"%{location}%"))
     if min_duration is not None:
         query = query.filter(Trek.duration_days >= min_duration)
     if max_duration is not None:
         query = query.filter(Trek.duration_days <= max_duration)
-    if min_duration is not None and max_duration is not None and min_duration > max_duration:
-        return error_response("min_duration cannot be greater than max_duration.", 400)
-
-    text = (request.args.get("q") or "").strip()
     if text:
         pattern = f"%{text}%"
         query = query.filter(
@@ -55,28 +83,42 @@ def list_open_treks():
         )
 
     treks = query.order_by(Trek.start_date).all()
-    return jsonify([trek.to_dict() for trek in treks]), 200
+    result = [trek.to_dict() for trek in treks]
+
+    # --- Step 4: remember the answer for the next request with the same filters ---
+    cache_set(key, result, TREK_LIST_TIMEOUT)
+    return jsonify(result), 200
 
 
 @user_bp.route("/treks/<int:trek_id>", methods=["GET"])
 @role_required(User.ROLE_TREKKER)
 def trek_detail(trek_id):
-    """One trek's details, plus whether the logged-in trekker already has it booked."""
+    """One trek's details, plus whether the logged-in trekker already has it booked.
+
+    Only the trek's own fields are cached (5 minutes) because they are the same
+    for every trekker. The booking checks below are different for each trekker,
+    so they always run against the database and are never cached.
+    """
     user = get_current_user()
 
-    trek = db.session.get(Trek, trek_id)
-    if trek is None:
-        return error_response("Trek not found.", 404)
+    key = trek_detail_key(trek_id)
+    trek_data = cache_get(key)
+    if trek_data is None:
+        trek = db.session.get(Trek, trek_id)
+        if trek is None:
+            return error_response("Trek not found.", 404)
+        trek_data = trek.to_dict()
+        cache_set(key, trek_data, TREK_DETAIL_TIMEOUT)
 
     # Treks that are not Open are hidden from browsing, so only a trekker who has
     # (or had) a booking on one may open its page, e.g. from their booking history
-    ever_booked = Booking.query.filter_by(user_id=user.id, trek_id=trek.id).first() is not None
-    if trek.status != "Open" and not ever_booked:
+    ever_booked = Booking.query.filter_by(user_id=user.id, trek_id=trek_id).first() is not None
+    if trek_data["status"] != "Open" and not ever_booked:
         return error_response("Trek not found.", 404)
 
-    already_booked = Booking.query.filter_by(user_id=user.id, trek_id=trek.id, status="Booked").first() is not None
+    already_booked = Booking.query.filter_by(user_id=user.id, trek_id=trek_id, status="Booked").first() is not None
 
-    data = trek.to_dict()
+    data = dict(trek_data)  # copy, so the per-user flag is not mixed into the shared trek data
     data["already_booked"] = already_booked  # lets the page disable the Book button
     return jsonify(data), 200
 
@@ -134,6 +176,9 @@ def book_trek(trek_id):
         db.session.rollback()
         return error_response("You already have an active booking for this trek.", 409)
 
+    # One seat fewer now, so the cached slot counts are wrong: remove them
+    clear_trek_caches(trek.id)
+
     db.session.refresh(trek)
     return jsonify({
         "message": f"Booked {trek.name}.",
@@ -169,6 +214,9 @@ def cancel_booking(booking_id):
         {Trek.available_slots: Trek.available_slots + 1}, synchronize_session=False
     )
     db.session.commit()  # status change and slot give-back saved together
+
+    # The seat is free again, so the cached slot counts are wrong: remove them
+    clear_trek_caches(trek.id)
 
     return jsonify({"message": "Booking cancelled.", "booking": booking_details(booking)}), 200
 
