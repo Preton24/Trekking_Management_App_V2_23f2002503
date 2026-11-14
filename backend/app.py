@@ -1,12 +1,13 @@
+import logging
 import os
 from datetime import timedelta
 
 from flask import Flask, jsonify
-from flask_caching import Cache
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from flask_mail import Mail
 
+from cache_utils import cache
 from models import User, db
 from routes.admin import admin_bp
 from routes.auth import auth_bp
@@ -35,6 +36,8 @@ class Config:
     REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     CACHE_TYPE = "RedisCache"
     CACHE_REDIS_URL = REDIS_URL
+    # Put in front of every cache key, so our keys are easy to spot in Redis
+    CACHE_KEY_PREFIX = "trekapp:"
     CACHE_DEFAULT_TIMEOUT = 300  # seconds
     CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/1")
     CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
@@ -50,8 +53,8 @@ class Config:
     ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
 
-# Extensions are created once here and attached to the app inside create_app()
-cache = Cache()
+# Extensions are created once and attached to the app inside create_app().
+# The cache object is created in cache_utils.py so route files can import it too.
 jwt = JWTManager()
 mail = Mail()
 
@@ -81,6 +84,9 @@ def create_app(config_class=Config):
     """App factory: builds and returns a configured Flask app."""
     app = Flask(__name__)
     app.config.from_object(config_class)
+
+    # Show INFO messages, so the CACHE HIT / MISS / CLEAR lines appear in the terminal
+    app.logger.setLevel(logging.INFO)
 
     # Make sure the instance folder exists so SQLite can create the .db file there
     os.makedirs(os.path.join(BASE_DIR, "instance"), exist_ok=True)

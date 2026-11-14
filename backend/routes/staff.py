@@ -4,6 +4,7 @@ Staff can only see and change treks that the admin assigned to them.
 """
 from flask import Blueprint, jsonify, request
 
+from cache_utils import clear_trek_caches
 from models import Booking, Trek, User, db
 from utils import error_response, get_current_user, role_required
 
@@ -102,6 +103,8 @@ def update_my_trek(trek_id):
     # Free seats = capacity minus seats already taken
     trek.available_slots = new_total - booked
     db.session.commit()
+    # Slots or status changed, so the cached trek list/detail/stats are out of date
+    clear_trek_caches(trek.id)
 
     result = trek.to_dict()
     result["registered_count"] = booked
@@ -151,6 +154,8 @@ def start_trek(trek_id):
 
     trek.status = "Ongoing"
     db.session.commit()
+    # The trek is no longer Open, so it must leave the cached list of open treks
+    clear_trek_caches(trek.id)
     return jsonify({"message": "Trek started.", "trek": trek.to_dict()}), 200
 
 
@@ -173,6 +178,8 @@ def complete_trek(trek_id):
     for booking in active_bookings:
         booking.status = "Completed"
     db.session.commit()
+    # Status changed again, so remove the cached copies of this trek
+    clear_trek_caches(trek.id)
 
     return jsonify({
         "message": f"Trek completed. {len(active_bookings)} bookings marked Completed.",

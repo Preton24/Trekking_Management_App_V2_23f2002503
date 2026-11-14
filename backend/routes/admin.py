@@ -9,6 +9,7 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request
 from sqlalchemy import func
 
+from cache_utils import ADMIN_STATS_KEY, ADMIN_STATS_TIMEOUT, cache_get, cache_set, clear_trek_caches
 from models import Booking, StaffProfile, Trek, User, db
 from utils import error_response, role_required
 
@@ -152,6 +153,8 @@ def create_trek():
     )
     db.session.add(trek)
     db.session.commit()
+    # A new trek must show up in the cached trek lists and stats straight away
+    clear_trek_caches(trek.id)
     return jsonify({"message": "Trek created.", "trek": trek.to_dict()}), 201
 
 
@@ -204,6 +207,8 @@ def update_trek(trek_id):
     trek.available_slots = trek.total_slots - booked_seats
 
     db.session.commit()
+    # Cached copies still hold the old fields and slot count, so remove them
+    clear_trek_caches(trek.id)
     return jsonify({"message": "Trek updated.", "trek": trek.to_dict()}), 200
 
 
@@ -226,6 +231,8 @@ def delete_trek(trek_id):
 
     db.session.delete(trek)
     db.session.commit()
+    # Otherwise the deleted trek would stay visible until the cache timed out
+    clear_trek_caches(trek_id)
     return jsonify({"message": "Trek deleted."}), 200
 
 
@@ -253,6 +260,8 @@ def assign_staff(trek_id):
 
     trek.assigned_staff_id = staff.id
     db.session.commit()
+    # The cached trek data includes the staff name, so it has changed too
+    clear_trek_caches(trek.id)
     return jsonify({"message": f"{staff.name} assigned to {trek.name}.", "trek": trek.to_dict()}), 200
 
 
@@ -518,7 +527,15 @@ def stats():
     bookings_per_trek counts bookings that are not cancelled, because a
     cancelled seat is free again and should not make a trek look popular.
     Every trek appears (even with 0 bookings) and every status appears (even with 0).
+
+    Cached for 2 minutes: the dashboard runs several COUNT queries, and its numbers
+    do not need to be exact to the second. The cache is read here, inside the
+    route, so the admin role check has already passed before anything is served.
     """
+    cached_stats = cache_get(ADMIN_STATS_KEY)
+    if cached_stats is not None:
+        return jsonify(cached_stats), 200
+
     # Count of bookings for each trek id, done in one query by the database
     counts = (
         db.session.query(Booking.trek_id, func.count(Booking.id))
@@ -543,11 +560,13 @@ def stats():
             "count": Trek.query.filter_by(status=status).count(),
         })
 
-    return jsonify({
+    result = {
         "total_treks": Trek.query.count(),
         "total_users": User.query.filter_by(role=User.ROLE_TREKKER).count(),
         "total_staff": User.query.filter_by(role=User.ROLE_STAFF).count(),
         "total_bookings": Booking.query.count(),
         "bookings_per_trek": bookings_per_trek,
         "treks_by_status": treks_by_status,
-    }), 200
+    }
+    cache_set(ADMIN_STATS_KEY, result, ADMIN_STATS_TIMEOUT)
+    return jsonify(result), 200
